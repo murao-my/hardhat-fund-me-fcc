@@ -1,0 +1,41 @@
+{
+  "language": "Solidity",
+  "sources": {
+    "contracts/FundMe.sol": {
+      "content": "//SPDX-License-Identifier:MIT\npragma solidity ^0.8.8;\n\n//取得方法：https://docs.chain.link/docs/get-the-latest-price/\nimport \"@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol\";\nimport \"./PriceConverter.sol\";\n\nerror FundMe__NotOwner();\n\n/**@title A contract for crowd funding\n *\n */\ncontract FundMe {\n    // Type declarations\n    using PriceConverter for uint256;\n    //constant:21438gas\n    //non-constant: 23538gas\n    //constantを使うことでストレージではなくコントラクトのバイトコードに格納するのでgasを節約する\n    //State variables\n    uint256 public constant MINIMUM_USD = 50 * 1e18;\n    AggregatorV3Interface private s_priceFeed;\n    address[] private s_funders;\n    mapping(address => uint256) private s_addressToAmountFunded;\n    //immutableを使うことでストレージではなくコントラクトのバイトコードに格納するのでgasを節約する\n    address private immutable i_owner;\n\n    //modifier\n    modifier onlyOwner() {\n        // require(msg.sender==i_owner,\"Sender is not owner!\");\n        //文字列を使わないのでgasを節約できる\n        if (msg.sender != i_owner) {\n            revert FundMe__NotOwner();\n        }\n        _; //呼び出し元functionを実行\n    }\n\n    //constructor\n    //receive\n    //fallback\n    //external\n    //public\n    //internal\n    //private\n    //view/pure\n    constructor(address priceFeedAddress) {\n        i_owner = msg.sender;\n        s_priceFeed = AggregatorV3Interface(priceFeedAddress);\n    }\n\n    //fund functionの呼出しなしでこのコントラクトにETHを送った場合何が起きる？\n    //solidityではコントラクトにETHを送った場合の挙動を実装する2つの特殊な関数がある\n    receive() external payable {\n        fund();\n    }\n\n    fallback() external payable {\n        fund();\n    }\n\n    //Eth is sent to contract\n    //   is msg.data empty?\n    //     /              \\\n    //   yes               no\n    //   /                  \\\n    // receive()は実装済？   fallback()\n    //   /       \\\n    //  yes      no\n    //  /         \\\n    // receive() fallback()\n    function fund() public payable {\n        //want to be able to set a minimum fund amount in USD\n        //1e18=1*10**18\n        require(\n            msg.value.getConversionRate(s_priceFeed) >= MINIMUM_USD,\n            \"Didn't send enough ether\"\n        );\n        s_funders.push(msg.sender);\n        s_addressToAmountFunded[msg.sender] = msg.value;\n    }\n\n    function withdraw() public onlyOwner {\n        for (\n            uint256 funderIndex = 0;\n            funderIndex < s_funders.length;\n            funderIndex++\n        ) {\n            address funder = s_funders[funderIndex];\n            s_addressToAmountFunded[funder] = 0;\n        }\n        //reset array\n        s_funders = new address[](0);\n\n        //actually withdraw the fund\n\n        //transfer\n        //msg.senderのtype：address\n        //payable(msg.sender):payable address\n        // //solidityではpayable addressのみnative tokenの送金可能\n        // payable(msg.sender).transfer(address(this).balance);\n        //send\n        // //requireを使うことでエラー発生時処理を戻すことが出来る\n        // bool sendSuccess = payable(msg.sender).send(address(this).balance);\n        // require(sendSuccess, \"Send Failed\");\n\n        //call\n        //任意の関数を呼ぶことが出来る？\n        //bytes型の変数を受け取ることもできる\n        // (bool callSuccess,bytes dataReturned)=payable(msg.sender).call{value:address(this).balance}(\"\");\n        (bool callSuccess, ) = payable(msg.sender).call{\n            value: address(this).balance\n        }(\"\");\n        require(callSuccess, \"Call Failed\");\n    }\n\n    function cheaperWithdraw() public onlyOwner {\n        address[] memory funders = s_funders;\n        for (\n            uint256 funderIndex = 0;\n            funderIndex < funders.length;\n            funderIndex++\n        ) {\n            address funder = funders[funderIndex];\n            s_addressToAmountFunded[funder] = 0;\n        }\n        //reset array\n        s_funders = new address[](0);\n\n        (bool callSuccess, ) = payable(msg.sender).call{\n            value: address(this).balance\n        }(\"\");\n        require(callSuccess, \"Call Failed\");\n    }\n\n    function getPriceFeed() public view returns (AggregatorV3Interface) {\n        return s_priceFeed;\n    }\n\n    function getFunder(uint256 index) public view returns (address) {\n        return s_funders[index];\n    }\n\n    function getAddressToAmountFunded(address funder)\n        public\n        view\n        returns (uint256)\n    {\n        return s_addressToAmountFunded[funder];\n    }\n\n    function getOwner() public view returns (address) {\n        return i_owner;\n    }\n}\n"
+    },
+    "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol": {
+      "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\n\ninterface AggregatorV3Interface {\n  function decimals() external view returns (uint8);\n\n  function description() external view returns (string memory);\n\n  function version() external view returns (uint256);\n\n  function getRoundData(uint80 _roundId)\n    external\n    view\n    returns (\n      uint80 roundId,\n      int256 answer,\n      uint256 startedAt,\n      uint256 updatedAt,\n      uint80 answeredInRound\n    );\n\n  function latestRoundData()\n    external\n    view\n    returns (\n      uint80 roundId,\n      int256 answer,\n      uint256 startedAt,\n      uint256 updatedAt,\n      uint80 answeredInRound\n    );\n}\n"
+    },
+    "contracts/PriceConverter.sol": {
+      "content": "//SPDX-License-Identifier:MIT\npragma solidity 0.8.8;\nimport \"@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol\";\n\nlibrary PriceConverter {\n    function getPrice(AggregatorV3Interface priceFeed)\n        internal\n        view\n        returns (uint256)\n    {\n        //他のコントラクトと対話するには次の２つが必要\n        //ABI:コントラクトのインタフェースを確認する\n        //ADDRESS:0x8A753747A1Fa494EC906cE90E9f37563A8AF630e 取得方法:https://docs.chain.link/docs/ethereum-addresses/\n        // AggregatorV3Interface priceFeed = AggregatorV3Interface(\n        //     0x8A753747A1Fa494EC906cE90E9f37563A8AF630e\n        // );\n        (, int256 price, , , ) = priceFeed.latestRoundData();\n        //ETH in term of USD\n        //3000.00000000\n        return uint256(price * 1e10); //1**10=1e10\n    }\n\n    function getConversionRate(\n        uint256 ethAmount,\n        AggregatorV3Interface priceFeed\n    ) internal view returns (uint256) {\n        uint256 ethPrice = getPrice(priceFeed);\n        uint256 ethAmountInUsd = (ethPrice * ethAmount) / 1e18;\n        return ethAmountInUsd;\n    }\n}\n"
+    }
+  },
+  "settings": {
+    "optimizer": {
+      "enabled": false,
+      "runs": 200
+    },
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "evm.bytecode",
+          "evm.deployedBytecode",
+          "evm.methodIdentifiers",
+          "metadata",
+          "devdoc",
+          "userdoc",
+          "storageLayout",
+          "evm.gasEstimates"
+        ],
+        "": [
+          "ast"
+        ]
+      }
+    },
+    "metadata": {
+      "useLiteralContent": true
+    }
+  }
+}
